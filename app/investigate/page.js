@@ -11,6 +11,10 @@ export default function InvestigatePage() {
   const caseId = searchParams.get("case") || "1";
   const caseData = cases[caseId];
 
+  const [progressSaving, setProgressSaving] = useState(false);
+  const [progressError, setProgressError] = useState("");
+  const [pendingOutcome, setPendingOutcome] = useState(null);
+
   const [variationIndex, setVariationIndex] = useState(null);
   const [variationReady, setVariationReady] = useState(false);
 
@@ -46,7 +50,7 @@ export default function InvestigatePage() {
       return;
     }
 
-    const storageKey = "casemind-case-" + caseId + "-variation";
+    const storageKey = `casemind-case-${caseId}-variation`;
     const previousIndex = localStorage.getItem(storageKey);
 
     let nextIndex = Math.floor(
@@ -66,7 +70,6 @@ export default function InvestigatePage() {
     setVariationIndex(nextIndex);
     localStorage.setItem(storageKey, String(nextIndex));
     setVariationReady(true);
-
     setElapsedSeconds(0);
     setTimerRunning(true);
   }, [caseId, caseData]);
@@ -83,8 +86,32 @@ export default function InvestigatePage() {
     return () => clearInterval(timer);
   }, [variationReady, variationIndex, timerRunning]);
 
+  const resetInvestigationState = () => {
+    setSelectedEvidence(null);
+    setSelectedSuspect(null);
+
+    setChatMessages([]);
+    setChatInput("");
+    setChatError("");
+    setChatLoading(false);
+
+    setDiscoveredClues([]);
+    setNotes("");
+    setShowNotes(false);
+    setShowAccusation(false);
+
+    setAccusedSuspect("");
+    setReasoning("");
+    setResult(null);
+
+    setProgressError("");
+    setPendingOutcome(null);
+  };
+
   const restartInvestigation = () => {
-    if (!caseData || !caseData.variations?.length) return;
+    if (!caseData?.variations?.length || progressSaving) {
+      return;
+    }
 
     let nextIndex = Math.floor(
       Math.random() * caseData.variations.length
@@ -101,26 +128,11 @@ export default function InvestigatePage() {
     setVariationIndex(nextIndex);
 
     localStorage.setItem(
-      "casemind-case-" + caseId + "-variation",
+      `casemind-case-${caseId}-variation`,
       String(nextIndex)
     );
 
-    setSelectedEvidence(null);
-    setSelectedSuspect(null);
-
-    setChatMessages([]);
-    setChatInput("");
-    setChatError("");
-    setChatLoading(false);
-
-    setDiscoveredClues([]);
-    setNotes("");
-    setShowNotes(false);
-    setShowAccusation(false);
-    setAccusedSuspect("");
-    setReasoning("");
-    setResult(null);
-
+    resetInvestigationState();
     setElapsedSeconds(0);
     setTimerRunning(true);
   };
@@ -165,7 +177,14 @@ export default function InvestigatePage() {
 
     const message = chatInput.trim();
 
-    if (!message || chatLoading || !selectedSuspect) return;
+    if (
+      !message ||
+      chatLoading ||
+      !selectedSuspect ||
+      progressSaving
+    ) {
+      return;
+    }
 
     const previousMessages = chatMessages;
 
@@ -196,7 +215,9 @@ export default function InvestigatePage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "The suspect could not respond.");
+        throw new Error(
+          data.error || "The suspect could not respond."
+        );
       }
 
       setChatMessages((previous) => [
@@ -204,31 +225,110 @@ export default function InvestigatePage() {
         { role: "model", text: data.answer },
       ]);
     } catch (error) {
-      setChatError(error.message || "Something went wrong. Try again.");
+      setChatError(
+        error.message || "Something went wrong. Try again."
+      );
     } finally {
       setChatLoading(false);
     }
   };
 
-  const makeAccusation = (event) => {
+  const saveCompletedInvestigation = async (outcome) => {
+    if (
+      progressSaving ||
+      !["correct", "wrong", "revealed"].includes(outcome)
+    ) {
+      return false;
+    }
+
+    setProgressSaving(true);
+    setProgressError("");
+    setPendingOutcome(outcome);
+
+    try {
+      const response = await fetch("/api/progress", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          caseId,
+          variationIndex,
+          outcome,
+          elapsedSeconds,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Could not save progress."
+        );
+      }
+
+      setResult(outcome);
+      setTimerRunning(false);
+      setProgressError("");
+
+      return true;
+    } catch (error) {
+      setProgressError(
+        error.message || "Could not save progress."
+      );
+
+      return false;
+    } finally {
+      setProgressSaving(false);
+    }
+  };
+
+  const makeAccusation = async (event) => {
     event.preventDefault();
 
-    if (!accusedSuspect || !reasoning.trim()) return;
+    if (
+      result !== null ||
+      progressSaving ||
+      !accusedSuspect ||
+      !reasoning.trim()
+    ) {
+      return;
+    }
 
-    const currentVariation = caseData.variations[variationIndex];
+    const currentVariation = caseData?.variations?.[variationIndex];
+
+    if (!currentVariation) return;
+
+    const outcome =
+      accusedSuspect === currentVariation.culprit
+        ? "correct"
+        : "wrong";
 
     setTimerRunning(false);
+    setShowAccusation(false);
 
-    if (accusedSuspect === currentVariation.culprit) {
-      setResult("correct");
-    } else {
-      setResult("wrong");
+    const saved = await saveCompletedInvestigation(outcome);
+
+    if (!saved) {
+      setTimerRunning(true);
     }
+  };
+
+  const revealCulprit = async () => {
+    if (result !== "wrong" || progressSaving) return;
+
+    await saveCompletedInvestigation("revealed");
+  };
+
+  const retryProgressSave = async () => {
+    if (!pendingOutcome || progressSaving) return;
+
+    await saveCompletedInvestigation(pendingOutcome);
   };
 
   if (!caseData) {
     return (
-      <main className="min-h-screen bg-black px-6 py-12 text-white flex items-center justify-center">
+      <main className="flex min-h-screen items-center justify-center bg-black px-6 py-12 text-white">
         <div className="max-w-lg text-center">
           <h1 className="text-3xl font-bold">Case Not Found</h1>
 
@@ -249,8 +349,10 @@ export default function InvestigatePage() {
 
   if (!variationReady || variationIndex === null) {
     return (
-      <main className="min-h-screen bg-black text-white flex items-center justify-center">
-        <p className="text-neutral-400">Preparing investigation...</p>
+      <main className="flex min-h-screen items-center justify-center bg-black text-white">
+        <p className="text-neutral-400">
+          Preparing investigation...
+        </p>
       </main>
     );
   }
@@ -258,6 +360,21 @@ export default function InvestigatePage() {
   const currentCase = caseData.variations[variationIndex];
   const evidence = currentCase.evidence || [];
   const questions = currentCase.questions || {};
+
+  const progressNotice = progressError ? (
+    <div className="mt-4 rounded-lg border border-red-800 bg-red-950/30 p-4">
+      <p className="text-sm text-red-300">{progressError}</p>
+
+      <button
+        type="button"
+        onClick={retryProgressSave}
+        disabled={progressSaving}
+        className="mt-3 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
+      >
+        {progressSaving ? "Saving..." : "Retry Save"}
+      </button>
+    </div>
+  ) : null;
 
   if (result === "correct" || result === "revealed") {
     const culprit = caseData.suspects.find(
@@ -312,7 +429,9 @@ export default function InvestigatePage() {
 
             {result === "correct" && (
               <div className="mt-6 rounded-xl bg-neutral-800 p-6">
-                <p className="text-sm text-neutral-400">Your Reasoning</p>
+                <p className="text-sm text-neutral-400">
+                  Your Reasoning
+                </p>
 
                 <p className="mt-3 leading-7 text-neutral-300">
                   {reasoning}
@@ -330,9 +449,12 @@ export default function InvestigatePage() {
               </p>
             </div>
 
+            {progressNotice}
+
             <button
               onClick={restartInvestigation}
-              className="mt-8 rounded-lg bg-white px-5 py-3 font-semibold text-black transition hover:bg-neutral-200"
+              disabled={progressSaving}
+              className="mt-8 rounded-lg bg-white px-5 py-3 font-semibold text-black transition hover:bg-neutral-200 disabled:opacity-50"
             >
               Play This Case Again
             </button>
@@ -380,7 +502,9 @@ export default function InvestigatePage() {
             </p>
 
             <div className="mt-8 rounded-xl bg-neutral-800 p-6">
-              <p className="text-sm text-neutral-400">Your Reasoning</p>
+              <p className="text-sm text-neutral-400">
+                Your Reasoning
+              </p>
 
               <p className="mt-3 leading-7 text-neutral-300">
                 {reasoning}
@@ -400,26 +524,23 @@ export default function InvestigatePage() {
               </p>
             </div>
 
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            {progressNotice}
+
+            <div className="mt-8">
               <button
-                onClick={() => {
-                  setResult(null);
-                  setShowAccusation(false);
-                  setAccusedSuspect("");
-                  setReasoning("");
-                  setTimerRunning(true);
-                }}
-                className="rounded-lg bg-white px-5 py-3 font-semibold text-black transition hover:bg-neutral-200"
+                onClick={revealCulprit}
+                disabled={progressSaving}
+                className="rounded-lg border border-neutral-600 px-5 py-3 font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-50"
               >
-                Continue Investigating
+                {progressSaving && pendingOutcome === "revealed"
+                  ? "Saving..."
+                  : "Reveal the Culprit"}
               </button>
 
-              <button
-                onClick={() => setResult("revealed")}
-                className="rounded-lg border border-neutral-600 px-5 py-3 font-semibold text-white transition hover:bg-neutral-800"
-              >
-                Reveal the Culprit
-              </button>
+              <p className="mt-3 text-sm text-neutral-500">
+                Your incorrect accusation has been saved. Revealing the
+                culprit will also be recorded as a completed investigation.
+              </p>
             </div>
           </div>
         </div>
@@ -457,7 +578,8 @@ export default function InvestigatePage() {
 
             <button
               onClick={restartInvestigation}
-              className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 transition hover:bg-neutral-900 hover:text-white"
+              disabled={progressSaving}
+              className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 transition hover:bg-neutral-900 hover:text-white disabled:opacity-50"
             >
               Restart Case
             </button>
@@ -755,13 +877,15 @@ export default function InvestigatePage() {
                       onChange={(event) => setChatInput(event.target.value)}
                       maxLength={1000}
                       placeholder={`Ask ${selectedSuspect.name} a question...`}
-                      disabled={chatLoading}
+                      disabled={chatLoading || progressSaving}
                       className="min-w-0 flex-1 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-white outline-none placeholder:text-neutral-600 focus:border-neutral-600 disabled:opacity-50"
                     />
 
                     <button
                       type="submit"
-                      disabled={chatLoading || !chatInput.trim()}
+                      disabled={
+                        chatLoading || !chatInput.trim() || progressSaving
+                      }
                       className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
                     >
                       Send
@@ -792,11 +916,14 @@ export default function InvestigatePage() {
 
             <button
               onClick={() => setShowAccusation(!showAccusation)}
-              className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-neutral-200"
+              disabled={progressSaving}
+              className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-neutral-200 disabled:opacity-50"
             >
               {showAccusation ? "Close" : "Make Accusation"}
             </button>
           </div>
+
+          {!result && progressNotice}
 
           {showAccusation && (
             <form
@@ -848,10 +975,12 @@ export default function InvestigatePage() {
 
               <button
                 type="submit"
-                disabled={!accusedSuspect || !reasoning.trim()}
+                disabled={
+                  !accusedSuspect || !reasoning.trim() || progressSaving
+                }
                 className="mt-5 rounded-lg bg-white px-5 py-3 font-semibold text-black transition hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
               >
-                Submit Accusation
+                {progressSaving ? "Saving Investigation..." : "Submit Accusation"}
               </button>
             </form>
           )}

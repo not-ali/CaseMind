@@ -1,4 +1,8 @@
+
+"use client";
+
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 const cases = [
   {
@@ -22,9 +26,30 @@ const cases = [
 ];
 
 export default function Cases() {
+  const searchParams = useSearchParams();
+  const authStatus = searchParams.get("auth");
+
   return (
     <main className="min-h-screen bg-zinc-950 px-6 py-12 text-white">
       <div className="mx-auto max-w-6xl">
+        {authStatus === "registered" && (
+          <div
+            role="status"
+            className="mb-6 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-300"
+          >
+            Account created successfully! Welcome to CaseMind.
+          </div>
+        )}
+
+        {authStatus === "login" && (
+          <div
+            role="status"
+            className="mb-6 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-300"
+          >
+            Login successful! Welcome back, detective.
+          </div>
+        )}
+
         <div className="mb-10">
           <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">
             CASE MIND

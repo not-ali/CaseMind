@@ -1,4 +1,4 @@
-
+import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { cases } from "@/lib/cases";
@@ -7,6 +7,20 @@ export const maxDuration = 15;
 
 export async function POST(request) {
   try {
+    const supabase = await createClient();
+
+const {
+  data: { user },
+  error: authError,
+} = await supabase.auth.getUser();
+
+if (authError || !user) {
+  return NextResponse.json(
+    { error: "Please sign in to interrogate suspects." },
+    { status: 401 }
+  );
+}
+
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
